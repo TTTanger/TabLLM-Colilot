@@ -65,10 +65,8 @@ def pdf_to_image(file_path):
 
     except Exception as e:
         print("无法转换PDF为图像:", str(e))
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    image_path = os.path.join(script_dir, combined_image_path)
 
-    return image_path
+    return combined_image_path
 
 
 def excel_to_dataframe(file):
@@ -91,38 +89,50 @@ def file_extension(file):
         return None
 
 
-def file_convert(file):
+def file_convert(files):
     pythoncom.CoInitialize()
-    file_img = None  # 默认值设置为 None
-    file_ex = file_extension(file)
-    if file_ex == 'docx' or file_ex == 'doc' or file_ex == 'pdf':
-        if file_ex == 'docx' or file_ex == 'doc':
-            file_pdf = word_to_pdf(file)
-            file_img = repr(pdf_to_image(file_pdf))
-            print(file_img)
-        elif file_ex == 'pdf':
-            file_img = repr(pdf_to_image(file))
+    final_df = pd.DataFrame()
+    # 使用默认模型
+    paddleocr = PaddleOCR(lang='ch', show_log=False)
+    result_dfs = []  # 创建一个空列表来存储结果的DataFrame
+    for file in files:
+        # Default value set to None
+        file_img = None
+        file_ex = file_extension(file)
+        if file_ex == 'docx' or file_ex == 'doc' or file_ex == 'pdf':
+            if file_ex == 'docx' or file_ex == 'doc':
+                file_pdf = word_to_pdf(file)
+                file_img = pdf_to_image(file_pdf)
+                print(file_img)
+                os.remove(file_pdf)
 
-        if file_img is not None:
-            # 使用默认模型路径
-            paddleocr = PaddleOCR(lang='ch', show_log=False)
-            # 去除额外引号
-            file_img = file_img.strip("'")
-            # 使用 PIL 打开图像文件
-            img = cv2.imread(file_img)  # 打开需要识别的图片
-            result = paddleocr.ocr(img)
-            alist = []
-            for i in range(len(result[0])):
-                alist.append(result[0][i][1][0])  # 将识别结果存储到alist中
-            print(alist)  # 输出识别结果
+            elif file_ex == 'pdf':
+                file_img = pdf_to_image(file)
 
-            # 将结果转换为DataFrame
-            file_df = pd.DataFrame({'识别结果': alist})
-            return file_df
+            if file_img is not None:
+                # 打开image文件
+                img = cv2.imread(file_img)
+                result = paddleocr.ocr(img)
+                if result is not None and len(result) > 0:
+                    alist = []
+                    for i in range(len(result[0])):
+                        alist.append(result[0][i][1][0])
+                    print(alist)
+                    # Convert the result to a DataFrame
+                    file_df = pd.DataFrame({'识别结果': alist})
+                    result_dfs.append(file_df)  # 将当前文件的DataFrame追加到列表中
+                    print("Succeeded in transforming")
+                    # 删除临时文件
+                    os.remove(file_img)
+                else:
+                    print("Failed in transforming")
 
-    elif file_ex == 'xlsx':
-        file_df = excel_to_dataframe(file)
-        return file_df
+        elif file_ex == 'xlsx':
+            file_df = excel_to_dataframe(file)
+            result_dfs.append(file_df)  # 将当前文件的DataFrame追加到列表中
+    final_df = pd.concat(result_dfs)
+
+    return final_df
 
 
 iface = gr.Interface(file_convert, gr.File(file_count="multiple",), gr.Dataframe(), title="表格转换器", live=True,)
