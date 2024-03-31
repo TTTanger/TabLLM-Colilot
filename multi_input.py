@@ -3,10 +3,11 @@ import cv2
 from paddleocr import PaddleOCR
 import pythoncom
 import pandas as pd
-import fitz
-from PIL import Image
 import os
 import win32com.client as win32
+import fitz
+from PIL import Image
+import json
 
 
 def word_to_pdf(word_rel_path):
@@ -44,32 +45,17 @@ def pdf_to_image(file_path):
         os.makedirs(output_folder)  # 创建输出文件夹
     try:
         doc = fitz.open(file_path)
-        images = []
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
             pix = page.get_pixmap()
             image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            images.append(image)
+            image.save(os.path.join(output_folder, f"page_{page_num}.png"))  # 保存图像
         doc.close()
-
-        # 拼接图像
-        combined_image = Image.new("RGB", (images[0].width, sum(image.height for image in images)))
-        y_offset = 0
-        for image in images:
-            combined_image.paste(image, (0, y_offset))
-            y_offset += image.height
-
-        # 保存拼接后的图像
-        combined_image_path = f"{output_folder}\\file_image.png"
-        combined_image.save(combined_image_path)
-
     except Exception as e:
         print("无法转换PDF为图像:", str(e))
 
-    return combined_image_path
 
-
-def excel_to_dataframe(file):
+def excel_to_df(file):
 
     # 指定Excel文件的路径
     excel_path = file
@@ -81,6 +67,74 @@ def excel_to_dataframe(file):
     return df
 
 
+''' ______________functions of img to dataframe______________'''
+
+
+def img_to_df(images_folder):
+    paddleocr = PaddleOCR(lang='ch', show_log=False)
+    images = [os.path.join(images_folder, img) for img in os.listdir(images_folder) if
+              img.endswith('.png') or img.endswith('.jpg')]
+    for file_img in images:
+        if file_img is not None:
+            # 打开image文件
+            img = cv2.imread(file_img)
+            result = paddleocr.ocr(img)
+            if result is not None and len(result) > 0:
+                print(f"Succeeded in transforming {file_img}")
+                save_result_as_json(result, file_img)  # 将结果保存为JSON文件
+            else:
+                print(f"Failed in transforming {file_img}")
+
+    return get_data_from_json()
+
+
+def save_result_as_json(result, file_img):
+    result_dict = {'file_img': file_img, 'text_coordinates': []}
+    for item in result:
+        for box in item:
+            coordinates = box[0]
+            text = box[1][0]
+            result_dict['text_coordinates'].append({'coordinates': coordinates, 'text': text})
+    json_file_name = 'result.json'
+    with open(json_file_name, 'a', encoding='utf-8') as json_file:
+        json.dump(result_dict, json_file, ensure_ascii=False)
+        json_file.write('\n')
+
+
+def get_data_from_json():
+    df_list = []
+
+    # 从result.json文件中逐行读取JSON数据
+    with open('result.json', 'r', encoding='utf-8') as file:
+        for line in file:
+            json_data = json.loads(line)
+
+            # 提取文件名和文本坐标数据
+            file_img = json_data["file_img"]
+            text_coordinates = json_data["text_coordinates"]
+
+            # 将数据填充到DataFrame中
+            for text_coord in text_coordinates:
+                coordinates = text_coord["coordinates"]
+                text = text_coord["text"]
+                df_list.append(pd.DataFrame({
+                    "Text": [text],
+                    "Coordinate_1": [coordinates[0][0]],
+                    "Coordinate_2": [coordinates[0][1]],
+                    "Coordinate_3": [coordinates[1][0]],
+                    "Coordinate_4": [coordinates[1][1]]
+                }))
+
+    df = pd.concat(df_list, ignore_index=True)
+    print(df)
+    with open('result.json', 'w', encoding='utf-8') as file:
+        file.write("")
+    return df
+
+
+'''___________________divider___________________'''
+
+
 def file_extension(file):
     filename = file.name
     if "." in filename:
@@ -89,51 +143,48 @@ def file_extension(file):
         return None
 
 
+def delete_intermediate_files(folder):
+    for file_name in os.listdir(folder):
+        file_path = os.path.join(folder, file_name)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+    os.rmdir(folder)
+
+
 def file_convert(files):
+    if not files:
+        return "请提交文件"  # 如果没有文件输入，则返回提示消息
+
     pythoncom.CoInitialize()
     final_df = pd.DataFrame()
-    # 使用默认模型
-    paddleocr = PaddleOCR(lang='ch', show_log=False)
+    images_folder = 'images'
     result_dfs = []  # 创建一个空列表来存储结果的DataFrame
     for file in files:
-        # Default value set to None
-        file_img = None
         file_ex = file_extension(file)
         if file_ex == 'docx' or file_ex == 'doc' or file_ex == 'pdf':
             if file_ex == 'docx' or file_ex == 'doc':
                 file_pdf = word_to_pdf(file)
-                file_img = pdf_to_image(file_pdf)
-                print(file_img)
+                pdf_to_image(file_pdf)
                 os.remove(file_pdf)
 
             elif file_ex == 'pdf':
-                file_img = pdf_to_image(file)
+                pdf_to_image(file)
 
-            if file_img is not None:
-                # 打开image文件
-                img = cv2.imread(file_img)
-                result = paddleocr.ocr(img)
-                if result is not None and len(result) > 0:
-                    alist = []
-                    for i in range(len(result[0])):
-                        alist.append(result[0][i][1][0])
-                    print(alist)
-                    # Convert the result to a DataFrame
-                    file_df = pd.DataFrame({'识别结果': alist})
-                    result_dfs.append(file_df)  # 将当前文件的DataFrame追加到列表中
-                    print("Succeeded in transforming")
-                    # 删除临时文件
-                    os.remove(file_img)
-                else:
-                    print("Failed in transforming")
+            df = img_to_df(images_folder)
+            result_dfs.append(df)  # 将当前文件的DataFrame追加到列表中
+            final_df = pd.concat(result_dfs)
 
         elif file_ex == 'xlsx':
-            file_df = excel_to_dataframe(file)
+            file_df = excel_to_df(file)
             result_dfs.append(file_df)  # 将当前文件的DataFrame追加到列表中
-    final_df = pd.concat(result_dfs)
+            final_df = pd.concat(result_dfs)
+
+    # 删除中间生成的图片
+    delete_intermediate_files(images_folder)
 
     return final_df
 
 
-iface = gr.Interface(file_convert, gr.File(file_count="multiple",), gr.Dataframe(), title="表格转换器", live=True,)
+iface = gr.Interface(file_convert, gr.File(file_count="multiple",),
+                     gr.Dataframe(), title="表格转换器", live=True,)
 iface.launch()
