@@ -177,11 +177,16 @@ def delete_intermediate_files(folder):
 
 
 def file_convert(files, final_df=None):
+    pythoncom.CoInitialize()
     if final_df is None:
         final_df = pd.DataFrame()
 
     images_folder = 'images'
     result_dfs = []
+
+    if not files:  # 处理清除操作
+        final_df = pd.DataFrame()
+        return final_df
 
     for file in files:
         file_ex = file_extension(file)
@@ -210,6 +215,7 @@ def file_convert(files, final_df=None):
 
 
 def call_interface():
+
     iface = gr.Interface(file_convert, gr.File(file_count="multiple",),
                          gr.Dataframe(), title="表格转换器", live=True,)
     iface.launch()
