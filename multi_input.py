@@ -3,14 +3,39 @@ import cv2
 from paddleocr import PaddleOCR
 import pythoncom
 import pandas as pd
-import os
 import win32com.client as win32
 import fitz
 from PIL import Image
 import json
+import zipfile
+import os
 
 
-def word_to_pdf(word_rel_path):
+def extract_zip(zip_file_path):
+    folder_path = os.path.dirname(zip_file_path)
+    extract_folder_path = os.path.join(folder_path, 'extracted')
+    os.makedirs(extract_folder_path, exist_ok=True)
+
+    file_objects = []
+    try:
+        with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_folder_path)
+
+        for root, dirs, files in os.walk(extract_folder_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                file_objects.append(open(file_path, 'rb'))
+                # 在这里处理文件对象，例如调用 file_extension 函数
+    finally:
+        for file in file_objects:
+            file.close()
+
+    return file_objects
+
+
+def word_to_pdf(file):
+    word_rel_path = file
+
     # 获取当前脚本所在的目录
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -84,8 +109,8 @@ def img_to_df(images_folder):
                 save_result_as_json(result, file_img)  # 将结果保存为JSON文件
             else:
                 print(f"Failed in transforming {file_img}")
-
-    return get_data_from_json()
+    df = get_data_from_json()
+    return df
 
 
 def save_result_as_json(result, file_img):
@@ -151,14 +176,13 @@ def delete_intermediate_files(folder):
     os.rmdir(folder)
 
 
-def file_convert(files):
-    if not files:
-        return "请提交文件"  # 如果没有文件输入，则返回提示消息
+def file_convert(files, final_df=None):
+    if final_df is None:
+        final_df = pd.DataFrame()
 
-    pythoncom.CoInitialize()
-    final_df = pd.DataFrame()
     images_folder = 'images'
-    result_dfs = []  # 创建一个空列表来存储结果的DataFrame
+    result_dfs = []
+
     for file in files:
         file_ex = file_extension(file)
         if file_ex == 'docx' or file_ex == 'doc' or file_ex == 'pdf':
@@ -166,25 +190,32 @@ def file_convert(files):
                 file_pdf = word_to_pdf(file)
                 pdf_to_image(file_pdf)
                 os.remove(file_pdf)
-
             elif file_ex == 'pdf':
                 pdf_to_image(file)
 
             df = img_to_df(images_folder)
-            result_dfs.append(df)  # 将当前文件的DataFrame追加到列表中
+            result_dfs.append(df)
             final_df = pd.concat(result_dfs)
 
         elif file_ex == 'xlsx':
             file_df = excel_to_df(file)
-            result_dfs.append(file_df)  # 将当前文件的DataFrame追加到列表中
+            result_dfs.append(file_df)
             final_df = pd.concat(result_dfs)
 
-    # 删除中间生成的图片
-    delete_intermediate_files(images_folder)
+        elif file_ex == 'zip' or file_ex == 'rar':
+            extracted_files = extract_zip(file)
+            final_df = file_convert(extracted_files, final_df)  # 递归调用
 
     return final_df
 
 
-iface = gr.Interface(file_convert, gr.File(file_count="multiple",),
-                     gr.Dataframe(), title="表格转换器", live=True,)
-iface.launch()
+def call_interface():
+    iface = gr.Interface(file_convert, gr.File(file_count="multiple",),
+                         gr.Dataframe(), title="表格转换器", live=True,)
+    iface.launch()
+    images_folder = 'images'
+    # 删除中间生成的图片
+    delete_intermediate_files(images_folder)
+
+
+call_interface()
