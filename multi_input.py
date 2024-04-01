@@ -1,14 +1,16 @@
 import gradio as gr
-import cv2
 from paddleocr import PaddleOCR
 import pythoncom
 import pandas as pd
 import win32com.client as win32
 import fitz
 from PIL import Image
+import numpy as np
 import json
-import zipfile
+import shutil
 import os
+import zipfile
+import rarfile
 
 
 def extract_zip(zip_file_path):
@@ -16,51 +18,51 @@ def extract_zip(zip_file_path):
     extract_folder_path = os.path.join(folder_path, 'extracted')
     os.makedirs(extract_folder_path, exist_ok=True)
 
-    file_objects = []
+    file_paths = []
+
     try:
-        with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_folder_path)
+        if zipfile.is_zipfile(zip_file_path):
+            with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_folder_path)
+        elif rarfile.is_rarfile(zip_file_path):
+            with rarfile.RarFile(zip_file_path, 'r') as rar_ref:
+                rar_ref.extractall(extract_folder_path)
 
         for root, dirs, files in os.walk(extract_folder_path):
             for file in files:
                 file_path = os.path.join(root, file)
-                file_objects.append(open(file_path, 'rb'))
-                # 在这里处理文件对象，例如调用 file_extension 函数
-    finally:
-        for file in file_objects:
-            file.close()
+                if zipfile.is_zipfile(file_path) or rarfile.is_rarfile(file_path):
+                    file_paths.extend(extract_zip(file_path))
+                else:
+                    file_paths.append(file_path)
 
-    return file_objects
+    finally:
+        pass
+
+    print(file_paths)
+    return file_paths
 
 
 def word_to_pdf(file):
     word_rel_path = file
-
     # 获取当前脚本所在的目录
     script_dir = os.path.dirname(os.path.abspath(__file__))
-
     # 拼接相对路径和当前目录，得到完整的Word文件路径
     word_abs_path = os.path.join(script_dir, word_rel_path)
-
     # 初始化Word应用
     word = win32.Dispatch("Word.Application")
-    word.Visible = False  # 设置Word应用为不可见
-
+    # 设置Word应用为不可见
+    word.Visible = False
     # 打开Word文档
     doc = word.Documents.Open(word_abs_path)
-
     # 指定PDF文件的保存路径和文件名
     pdf_path = os.path.join(script_dir, "output.pdf")
-
     # 保存为PDF
     doc.SaveAs(pdf_path, FileFormat=17)  # FileFormat=17 表示PDF格式
-
     # 关闭Word文档
     doc.Close(False)
-
     # 退出Word应用
     word.Quit()
-
     return pdf_path
 
 
@@ -102,8 +104,9 @@ def img_to_df(images_folder):
     for file_img in images:
         if file_img is not None:
             # 打开image文件
-            img = cv2.imread(file_img)
-            result = paddleocr.ocr(img)
+            img = Image.open(file_img)
+            img_array = np.array(img)
+            result = paddleocr.ocr(img_array)
             if result is not None and len(result) > 0:
                 print(f"Succeeded in transforming {file_img}")
                 save_result_as_json(result, file_img)  # 将结果保存为JSON文件
@@ -160,12 +163,9 @@ def get_data_from_json():
 '''___________________divider___________________'''
 
 
-def file_extension(file):
-    filename = file.name
-    if "." in filename:
-        return filename.rsplit(".", 1)[1]
-    else:
-        return None
+def file_extension(file_path):
+    _, extension = os.path.splitext(file_path)
+    return extension.lstrip('.')
 
 
 def delete_intermediate_files(folder):
@@ -178,10 +178,11 @@ def delete_intermediate_files(folder):
 
 def file_convert(files, final_df=None):
     pythoncom.CoInitialize()
+    images_folder = 'images'
+    os.makedirs(images_folder, exist_ok=True)
     if final_df is None:
         final_df = pd.DataFrame()
 
-    images_folder = 'images'
     result_dfs = []
 
     if not files:  # 处理清除操作
@@ -210,6 +211,13 @@ def file_convert(files, final_df=None):
         elif file_ex == 'zip' or file_ex == 'rar':
             extracted_files = extract_zip(file)
             final_df = file_convert(extracted_files, final_df)  # 递归调用
+
+        elif file_ex == 'jpg' or file_ex == 'png':
+            new_file_path = os.path.join(images_folder, os.path.basename(file))
+            shutil.move(file, new_file_path)
+            df = img_to_df(images_folder)
+            result_dfs.append(df)
+            final_df = pd.concat(result_dfs)
 
     return final_df
 
